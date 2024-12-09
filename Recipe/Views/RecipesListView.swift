@@ -43,9 +43,7 @@ struct RecipesListView: View {
             }
             .navigationTitle("Recipes")
         }.task {
-            Task {
-                await viewModel.refreshRecipes()
-            }
+            await viewModel.refreshRecipes()
         }
     }
     
