@@ -12,55 +12,43 @@ import UIKit
 @testable import Recipe
 
 struct RecipeImageCacheTests {
+    private let url = URL(string: "https://google.com")!
     
-    struct SaveImage {
-        @Test func successful() async throws {
-            let imageCache = withDependencies {
-                $0.fileCacheManager = .testValue
-                $0.dataWriter = .testValue
-            } operation: {
-                RecipeImageCache()
-            }
-            let image = UIImage(systemName: "fork.knife.circle.fill")!
-            
-            let result = imageCache.saveImage(image, for: "")
-            #expect(result)
+    @Test func successfulLoadImageFromDisk() async throws {
+        let result = try await withDependencies {
+            $0.fileCacheManager = .testValue
+            $0.dataWriter = .testValue
+        } operation: {
+            let imageCache = RecipeImageCache()
+            return try await imageCache.image(from: url)
         }
         
-        @Test func failure() async throws {
-            let result = withDependencies {
-                $0.fileCacheManager = .testValue
-                $0.dataWriter = .failureValue
-            } operation: {
-                let image = UIImage(systemName: "fork.knife.circle.fill")!
-                let imageCache = RecipeImageCache()
-                return imageCache.saveImage(image, for: "")
-            }
-            #expect(!result)
-        }
+        #expect(result != nil)
     }
-
-    struct LoadImage {
-        @Test func successful() async throws {
-            let imageCache = withDependencies {
-                $0.fileCacheManager = .testValue
-                $0.dataWriter = .testValue
-            } operation: {
-                RecipeImageCache()
-            }
-            let result = imageCache.loadImage(for: "")
-            #expect(result != nil)
+    
+    @Test func successfulLoadImageFromURL() async throws {
+        let result = try await withDependencies {
+            $0.fileCacheManager = .testValue
+            $0.dataWriter = .failureValue
+            $0.apiClient = .validImageDataValue
+        } operation: {
+            let imageCache = RecipeImageCache()
+            return try await imageCache.image(from: url)
         }
         
-        @Test func failure() async throws {
-            let result = withDependencies {
-                $0.fileCacheManager = .testValue
-                $0.dataWriter = .failureValue
-            } operation: {
-                let imageCache = RecipeImageCache()
-                return imageCache.loadImage(for: "")
-            }
-            #expect(result == nil)
+        #expect(result != nil)
+    }
+    
+    @Test func failureLoadImageFromDiskAndURL() async throws {
+        let result = try await withDependencies {
+            $0.fileCacheManager = .testValue
+            $0.dataWriter = .failureValue
+            $0.apiClient = .failureValue
+        } operation: {
+            let imageCache = RecipeImageCache()
+            return try await imageCache.image(from: url)
         }
+        
+        #expect(result == nil)
     }
 }

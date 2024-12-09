@@ -10,53 +10,106 @@ import SwiftUI
 import Dependencies
 
 protocol RecipeImageCacheProtocol: Sendable {
-    @discardableResult func saveImage(_ image: UIImage, for key: String) -> Bool
-    func loadImage(for key: String) -> UIImage?
+    func image(from url: URL) async throws -> UIImage?
 }
 
-final class RecipeImageCache: RecipeImageCacheProtocol {
+actor RecipeImageCache: RecipeImageCacheProtocol {
     private let cacheDirectory: URL
+    
+    private enum CacheEntry {
+        case inProgress(Task<UIImage, Error>)
+        case ready(UIImage)
+        case error
+    }
+    
+    private var cache: [URL: CacheEntry] = [:]
+    
+    private enum RecipeImageCacheError: Error {
+        case imageRequestFailure
+        case imageDiskFailure
+    }
     
     init() {
         @Dependency(\.fileCacheManager) var fileCacheManager
         cacheDirectory = try! fileCacheManager.createCacheDirectory("ImageCache")
     }
     
-    @discardableResult
-    func saveImage(_ image: UIImage, for key: String) -> Bool {
-        guard let data = image.jpegData(compressionQuality: 1) else { return false }
-        let fileURL = cacheDirectory.appendingPathComponent(key)
+    func image(from url: URL) async throws -> UIImage? {
+        if let cached = cache[url] {
+            switch cached {
+            case .ready(let image):
+                return image
+            case .inProgress(let task):
+                return try await task.value
+            case .error:
+                return nil
+            }
+        }
+        
+        let task = Task {
+            try await fetchImage(for: url)
+        }
+        
+        cache[url] = .inProgress(task)
         
         do {
-            @Dependency(\.dataWriter) var dataWriter
-            try dataWriter.write(data, fileURL)
-            print("RecipeImageCache - save image for \(key)")
-            return true
+            let image = try await task.value
+            cache[url] = .ready(image)
+            return image
         } catch {
-            print("RecipeImageCache - save image for \(key) - error: \(error) ")
-            return false
+            cache[url] = .error
+            return nil
         }
     }
     
-    func loadImage(for key: String) -> UIImage? {
+    private func fetchImage(for url: URL) async throws -> UIImage {
+        guard let key = url.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)?.uuidFromURLString() else {
+            print("RecipeImageCache - invalid photoUrl for \(url)")
+            throw RecipeImageCacheError.imageRequestFailure
+        }
+        
         let fileURL = cacheDirectory.appendingPathComponent(key)
         do {
             @Dependency(\.dataWriter) var dataWriter
             let data = try dataWriter.read(fileURL)
-            print("RecipeImageCache - load image for \(key)")
-            return UIImage(data: data)
+            if let image = UIImage(data: data) {
+                print("RecipeImageCache - load image from disk for \(url)")
+                return image
+            } else {
+                print("RecipeImageCache - failed load image from disk for \(url)")
+                throw RecipeImageCacheError.imageDiskFailure
+            }
         } catch {
-            print("RecipeImageCache - load image for \(key) - error: \(error)")
-            return nil
+            @Dependency(\.apiClient) var apiClient
+            let result = await apiClient.fetchData(url)
+            switch result {
+            case .success(let data):
+                if let image = UIImage(data: data) {
+                    Task.detached {
+                        @Dependency(\.dataWriter) var dataWriter
+                        try? dataWriter.write(data, fileURL)
+                        print("RecipeImageCache - write image to disk for \(url)")
+                    }
+                    
+                    print("RecipeImageCache - load image from url for \(url)")
+                    
+                    return image
+                } else {
+                    throw RecipeImageCacheError.imageRequestFailure
+                }
+            case .failure(_):
+                print("RecipeImageCache - failed load image from url for \(url)")
+                throw RecipeImageCacheError.imageRequestFailure
+            }
         }
     }
 }
 
 enum RecipeImageCacheKey: DependencyKey {
     static let liveValue: RecipeImageCacheProtocol = RecipeImageCache()
-    static let testValue: RecipeImageCacheProtocol = MockRecipeImageCache()
-    static let previewValue: RecipeImageCacheProtocol = MockRecipeImageCache()
-    static let failureValue: RecipeImageCacheProtocol = MockRecipeImageCache(returnImage: false)
+        static let testValue: RecipeImageCacheProtocol = MockRecipeImageCache()
+        static let previewValue: RecipeImageCacheProtocol = MockRecipeImageCache()
+        static let failureValue: RecipeImageCacheProtocol = MockRecipeImageCache(returnImage: false)
 }
 
 extension DependencyValues {
@@ -74,11 +127,7 @@ final class MockRecipeImageCache: RecipeImageCacheProtocol {
         self.returnImage = returnImage
     }
     
-    @discardableResult func saveImage(_ image: UIImage, for key: String) -> Bool {
-        returnImage
-    }
-    
-    func loadImage(for key: String) -> UIImage? {
+    func image(from url: URL) async throws -> UIImage? {
         if returnImage {
             return foodImage
         } else {

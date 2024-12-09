@@ -19,8 +19,8 @@ final class RecipeAsyncImageViewModel: Sendable {
     init(photoUrl: URL?, runTask: Bool = true) {
         self.photoUrl = photoUrl
         if runTask {
-            Task(priority: .background) {
-                await loadImage()
+            Task.detached(priority: .background) {
+                await self.loadImage()
             }
         }
     }
@@ -39,38 +39,11 @@ final class RecipeAsyncImageViewModel: Sendable {
         
         await setLoadingState()
         
-        guard let key = photoUrl.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)?.uuidFromURLString() else {
-            print("RecipeAsyncImageViewModel - invalid photoUrl")
-            await setPlaceholderState()
-            return
-        }
-        
         @Dependency(\.recipeImageCache) var recipeImageCache
-        if let image = recipeImageCache.loadImage(for: key) {
-            print("RecipeAsyncImageViewModel - load image from cache for \(key)")
+        if let image = try? await recipeImageCache.image(from: photoUrl) {
+            print("RecipeAsyncImageViewModel - image loaded")
             await setImageState(image)
         } else {
-            await fetchImage(for: photoUrl, with: key)
-        }
-    }
-    
-    private func fetchImage(for url: URL, with key: String) async {
-        @Dependency(\.apiClient) var apiClient
-        let result = await apiClient.fetchData(url)
-        switch result {
-        case .success(let data):
-            if let image = UIImage(data: data) {
-                print("RecipeAsyncImageViewModel - image loaded from url for \(key)")
-                await setImageState(image)
-                
-                @Dependency(\.recipeImageCache) var recipeImageCache
-                recipeImageCache.saveImage(image, for: key)
-            } else {
-                print("RecipeAsyncImageViewModel - image failed to create for \(key)")
-                await setPlaceholderState()
-            }
-        case .failure(_):
-            print("RecipeAsyncImageViewModel - image load failed for \(key)")
             await setPlaceholderState()
         }
     }
